@@ -8,7 +8,7 @@ Most ML models never leave the notebook they were trained in — or if they do, 
 
 The detection model itself is derived from prior conservation-technology work (thermal/underwater wildlife monitoring), where edge devices are commonly CPU-only — making CPU inference optimization a directly relevant, real-world constraint rather than an artificial one.
 
-## Week 1: Model Optimization & Containerized Serving
+## Model Optimization & Containerized Serving
 
 ### Objective
 Convert a baseline PyTorch model into an optimized, containerized inference service suitable for CPU-based edge deployment, with benchmarked evidence of the performance gain.
@@ -68,10 +68,3 @@ Current image size: 1.28GB. This includes `ultralytics`/`torch`, which were only
 `Python` · `PyTorch` · `ONNX` · `OpenVINO` · `FastAPI` · `OpenCV` · `Docker`
 
 ---
-
-## Roadmap
-
-- [x] **Week 1** — Model optimization, benchmarking, FastAPI serving, containerization
-- [ ] **Week 2** — Cloud deployment (AWS), MLflow model versioning, health checks/rollback
-- [ ] **Week 3** — Airflow retraining pipeline, GitHub Actions CI/CD, dataset versioning
-- [ ] **Week 4** — Prometheus/Grafana monitoring, load testing (Locust), drift detection
