@@ -1,0 +1,90 @@
+from fastapi import FastAPI, UploadFile
+from openvino import Core
+import numpy as np
+from PIL import Image
+import io, time, cv2
+
+app = FastAPI()
+core = Core()
+model = core.read_model("yolov8n_openvino_model/yolov8n.xml")
+compiled_model = core.compile_model(model, "CPU")
+
+output_layer = compiled_model.output(0)
+INPUT_SIZE = 640
+CONF_THRESHOLD = 0.25
+IOU_THRESHOLD = 0.45
+
+
+def preprocess(image: Image.Image):
+    img = np.array(image.convert("RGB"))
+    h, w = img.shape[:2]
+
+    # letterbox resize (preserve aspect ratio, pad to square)
+    scale = INPUT_SIZE / max(h, w)
+    new_h, new_w = int(h * scale), int(w * scale)
+    resized = cv2.resize(img, (new_w, new_h))
+
+    padded = np.full((INPUT_SIZE, INPUT_SIZE, 3), 114, dtype=np.uint8)
+    padded[0:new_h, 0:new_w] = resized
+
+    # normalize, HWC -> CHW, add batch dim
+    tensor = padded.astype(np.float32) / 255.0
+    tensor = tensor.transpose(2, 0, 1)
+    tensor = np.expand_dims(tensor, axis=0)
+
+    return tensor, scale, (h, w)
+
+
+def postprocess(result, scale, original_shape):
+    # result shape: (1, 84, 8400) -> transpose to (8400, 84)
+    predictions = result[0].transpose(1, 0)  # wait, will fix below
+    predictions = np.squeeze(result[0]).T  # (8400, 84)
+
+    boxes = predictions[:, :4]        # cx, cy, w, h
+    scores = predictions[:, 4:]       # 80 class scores
+    class_ids = np.argmax(scores, axis=1)
+    confidences = np.max(scores, axis=1)
+
+    mask = confidences > CONF_THRESHOLD
+    boxes, confidences, class_ids = boxes[mask], confidences[mask], class_ids[mask]
+
+    if len(boxes) == 0:
+        return []
+
+    # convert cx,cy,w,h -> x1,y1,x2,y2 (still in 640x640 letterboxed space)
+    x1 = boxes[:, 0] - boxes[:, 2] / 2
+    y1 = boxes[:, 1] - boxes[:, 3] / 2
+    x2 = boxes[:, 0] + boxes[:, 2] / 2
+    y2 = boxes[:, 1] + boxes[:, 3] / 2
+    nms_boxes = np.stack([x1, y1, x2 - x1, y2 - y1], axis=1)  # x,y,w,h for cv2.dnn.NMSBoxes
+
+    indices = cv2.dnn.NMSBoxes(
+        nms_boxes.tolist(), confidences.tolist(), CONF_THRESHOLD, IOU_THRESHOLD
+    )
+
+    detections = []
+    for i in np.array(indices).flatten():
+        bx1, by1, bx2, by2 = x1[i] / scale, y1[i] / scale, x2[i] / scale, y2[i] / scale
+        detections.append({
+            "class_id": int(class_ids[i]),
+            "confidence": float(confidences[i]),
+            "box": [float(bx1), float(by1), float(bx2), float(by2)],
+        })
+
+    return detections
+
+
+@app.post("/predict")
+async def predict(file: UploadFile):
+    start = time.perf_counter()
+    image = Image.open(io.BytesIO(await file.read()))
+    input_tensor, scale, original_shape = preprocess(image)
+    result = compiled_model([input_tensor])[output_layer]
+    detections = postprocess(result, scale, original_shape)
+    latency_ms = (time.perf_counter() - start) * 1000
+    return {"detections": detections, "latency_ms": latency_ms}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
