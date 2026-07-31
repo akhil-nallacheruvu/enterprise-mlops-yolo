@@ -8,3 +8,4 @@ yolov8n_openvino_model
 *.pem
 mlruns
 *.db
+/data
