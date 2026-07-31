@@ -1,18 +1,25 @@
-from fastapi import FastAPI, UploadFile
+from fastapi import FastAPI, UploadFile, Response
 from openvino import Core
 import numpy as np
 from PIL import Image
 import io, time, cv2
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 app = FastAPI()
 core = Core()
 model = core.read_model("yolov8n_openvino_model/yolov8n.xml")
 compiled_model = core.compile_model(model, "CPU")
-
 output_layer = compiled_model.output(0)
 INPUT_SIZE = 640
 CONF_THRESHOLD = 0.25
 IOU_THRESHOLD = 0.45
+
+REQUEST_COUNT = Counter(
+    "predict_requests_total", "Total prediction requests", ["status"]
+)
+REQUEST_LATENCY = Histogram(
+    "predict_latency_seconds", "Prediction request latency in seconds"
+)
 
 
 def preprocess(image: Image.Image):
@@ -37,7 +44,6 @@ def preprocess(image: Image.Image):
 
 def postprocess(result, scale, original_shape):
     # result shape: (1, 84, 8400) -> transpose to (8400, 84)
-    predictions = result[0].transpose(1, 0)  # wait, will fix below
     predictions = np.squeeze(result[0]).T  # (8400, 84)
 
     boxes = predictions[:, :4]        # cx, cy, w, h
@@ -73,18 +79,29 @@ def postprocess(result, scale, original_shape):
 
     return detections
 
-
 @app.post("/predict")
 async def predict(file: UploadFile):
     start = time.perf_counter()
-    image = Image.open(io.BytesIO(await file.read()))
-    input_tensor, scale, original_shape = preprocess(image)
-    result = compiled_model([input_tensor])[output_layer]
-    detections = postprocess(result, scale, original_shape)
-    latency_ms = (time.perf_counter() - start) * 1000
-    return {"detections": detections, "latency_ms": latency_ms}
+    try:
+        image = Image.open(io.BytesIO(await file.read()))
+        input_tensor, scale, original_shape = preprocess(image)
+        result = compiled_model([input_tensor])[output_layer]
+        detections = postprocess(result, scale, original_shape)
+        latency_s = time.perf_counter() - start
+
+        REQUEST_LATENCY.observe(latency_s)
+        REQUEST_COUNT.labels(status="success").inc()
+
+        return {"detections": detections, "latency_ms": latency_s * 1000}
+    except Exception as e:
+        REQUEST_COUNT.labels(status="error").inc()
+        raise
 
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+@app.get("/metrics")
+async def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
