@@ -9,3 +9,7 @@ yolov8n_openvino_model
 mlruns
 *.db
 /data
+airflow/logs/
+airflow/plugins/
+airflow/config/
+airflow/.env
