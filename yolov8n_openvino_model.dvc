@@ -1,0 +1,6 @@
+outs:
+- md5: 32a204daea718bea0012cc4d2e307505.dir
+  size: 6656286
+  nfiles: 3
+  hash: md5
+  path: yolov8n_openvino_model
