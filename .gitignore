@@ -5,3 +5,6 @@ yolov8n_openvino_model
 *.jpg
 *.onnx
 *.pt
+*.pem
+mlruns
+*.db

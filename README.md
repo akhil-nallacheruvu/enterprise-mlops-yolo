@@ -1,6 +1,6 @@
 # Production ML Serving Platform — Edge Vision Model
 
-A production-oriented serving pipeline for a YOLOv8n object detection model, built to demonstrate end-to-end ML lifecycle ownership: optimization → packaging → containerized deployment → (upcoming) cloud deployment, CI/CD, and observability.
+A production-oriented serving pipeline for a YOLOv8n object detection model, built to demonstrate end-to-end ML lifecycle ownership: optimization → packaging → containerized deployment → cloud deployment → (upcoming) CI/CD and observability.
 
 ## Business Problem
 
@@ -8,7 +8,9 @@ Most ML models never leave the notebook they were trained in — or if they do, 
 
 The detection model itself is derived from prior conservation-technology work (thermal/underwater wildlife monitoring), where edge devices are commonly CPU-only — making CPU inference optimization a directly relevant, real-world constraint rather than an artificial one.
 
-## Week 1: Model Optimization & Containerized Serving
+---
+
+## Model Optimization & Containerized Serving
 
 ### Objective
 Convert a baseline PyTorch model into an optimized, containerized inference service suitable for CPU-based edge deployment, with benchmarked evidence of the performance gain.
@@ -23,7 +25,7 @@ Convert a baseline PyTorch model into an optimized, containerized inference serv
 
 ### Results
 
-Benchmarked on an Intel 13th-gen i7-1355U (CPU-only, no GPU), 100 iterations per backend:
+Benchmarked on an Intel 13th-gen i7 (CPU-only, no GPU), 100 iterations per backend:
 
 | Backend | p50 Latency | p99 Latency | Throughput |
 |---|---|---|---|
@@ -64,14 +66,83 @@ curl -X POST http://localhost:8000/predict -F "file=@test_img.jpg"
 
 Current image size: 1.28GB. This includes `ultralytics`/`torch`, which were only required for the export step, not for serving — a multi-stage build separating export-time and serving-time dependencies is a planned optimization to reduce this footprint.
 
+**Note on model artifacts:** the exported OpenVINO/ONNX model files are intentionally excluded from version control (binary artifacts don't belong alongside source code in git). See [Deployment](#deployment) below for how they're transferred to a deployment target instead.
+
 ### Stack
 `Python` · `PyTorch` · `ONNX` · `OpenVINO` · `FastAPI` · `OpenCV` · `Docker`
 
 ---
 
-## Roadmap
+## Cloud Deployment & Experiment Tracking
 
-- [x] **Week 1** — Model optimization, benchmarking, FastAPI serving, containerization
-- [ ] **Week 2** — Cloud deployment (AWS), MLflow model versioning, health checks/rollback
-- [ ] **Week 3** — Airflow retraining pipeline, GitHub Actions CI/CD, dataset versioning
-- [ ] **Week 4** — Prometheus/Grafana monitoring, load testing (Locust), drift detection
+### Objective
+Move the containerized service from local-only execution to a publicly reachable cloud deployment, and establish experiment tracking so optimization decisions (Week 1's backend comparison) are reproducible and auditable rather than just reported.
+
+### Cloud Deployment (AWS EC2)
+
+**Infrastructure:**
+- Ubuntu Server (22.04/24.04 LTS), EC2 free-tier-eligible instance type
+- Docker installed directly on the instance
+- Security group configured to allow inbound traffic on the API port from the required source
+
+**Setup steps:**
+
+```bash
+# On the EC2 instance, after SSH-ing in:
+sudo apt update
+sudo apt install -y docker.io
+sudo usermod -aG docker ubuntu
+# log out and back in for group membership to take effect
+
+git clone <repo-url>
+cd <repo-directory>
+```
+
+Since model artifacts are deliberately excluded from git (see Week 1 note above), they're transferred separately over the same SSH connection:
+
+```bash
+# Run from the local machine, not the EC2 instance
+scp -i <path-to-key.pem> -r yolov8n_openvino_model/ <user>@<ec2-host>:~/<repo-directory>/
+```
+
+**Build and run on the instance:**
+
+```bash
+docker build -t enterprise-mlops-yolo .
+docker run -d -p 8000:8000 --restart unless-stopped --name yolo-service enterprise-mlops-yolo
+```
+
+The `--restart unless-stopped` policy ensures the service automatically recovers from a container crash or an instance reboot without manual intervention — a baseline reliability guarantee for anything claiming to be production-facing.
+
+**Verification (from an external machine, confirming the deployment is actually publicly reachable, not just alive on localhost):**
+
+```bash
+curl http://<ec2-public-ip>:8000/health
+curl -X POST http://<ec2-public-ip>:8000/predict -F "file=@test_img.jpg"
+```
+
+**Networking note:** the API port must be explicitly opened in the instance's security group (inbound rule, custom TCP, matching port, appropriately scoped source) — this is a common first-deployment stumbling block, since the container can be fully healthy and still be unreachable externally if this rule is missing or misconfigured.
+
+### Experiment Tracking (MLflow)
+
+Rather than reporting the Week 1 backend comparison as a static table only, each configuration (PyTorch baseline, ONNX Runtime, OpenVINO FP16) is logged as a tracked MLflow run — capturing parameters, metrics, and the associated model artifact together, so the optimization decision is reproducible and comparable rather than asserted after the fact.
+
+```bash
+pip install mlflow
+python track_experiments.py
+mlflow ui --host 0.0.0.0 --port 5000
+```
+
+Each run logs:
+- **Parameters:** backend, precision
+- **Metrics:** p50 latency, p99 latency, throughput
+- **Artifacts:** the corresponding model file(s) for that run
+
+This runs locally against a SQLite-backed MLflow store — sufficient for tracking a single project's experiments; a shared/remote tracking server would be the next step if multiple contributors or environments needed to log to the same registry.
+
+### Cost Management
+
+Deployed entirely within AWS free-tier limits (`t2.micro`/`t3.micro`, 750 instance-hours/month for the first 12 months). A billing budget alert was configured immediately after account creation as a standard safeguard against unexpected charges — a habit worth carrying into any cloud deployment, personal or professional.
+
+### Stack (additions)
+`AWS EC2` · `MLflow` · `SSH/SCP`
