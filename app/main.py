@@ -3,7 +3,7 @@ from openvino import Core
 import numpy as np
 from PIL import Image
 import io, time, cv2
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 app = FastAPI()
 core = Core()
@@ -13,14 +13,21 @@ output_layer = compiled_model.output(0)
 INPUT_SIZE = 640
 CONF_THRESHOLD = 0.25
 IOU_THRESHOLD = 0.45
+BASELINE_MEAN_BRIGHTNESS = 114.77       #run compute_baseline_stats.py to get these numbers
+BASELINE_STD_BRIGHTNESS = 0.0 
 
 REQUEST_COUNT = Counter(
     "predict_requests_total", "Total prediction requests", ["status"]
 )
+
 REQUEST_LATENCY = Histogram(
     "predict_latency_seconds", "Prediction request latency in seconds"
 )
 
+DRIFT_GAUGE = Gauge(
+    "input_brightness_drift_zscore",
+    "Z-score of current input brightness vs. reference baseline"
+)
 
 def preprocess(image: Image.Image):
     img = np.array(image.convert("RGB"))
@@ -79,11 +86,20 @@ def postprocess(result, scale, original_shape):
 
     return detections
 
+def compute_drift_score(image_array: np.ndarray) -> float:
+    current_mean = image_array.mean()
+    z_score = (current_mean - BASELINE_MEAN_BRIGHTNESS) / BASELINE_STD_BRIGHTNESS
+    DRIFT_GAUGE.set(z_score)
+    return z_score
+
 @app.post("/predict")
 async def predict(file: UploadFile):
     start = time.perf_counter()
     try:
         image = Image.open(io.BytesIO(await file.read()))
+        image_array = np.array(image.convert("RGB"))
+        drift_score = compute_drift_score(image_array)
+
         input_tensor, scale, original_shape = preprocess(image)
         result = compiled_model([input_tensor])[output_layer]
         detections = postprocess(result, scale, original_shape)
@@ -92,11 +108,14 @@ async def predict(file: UploadFile):
         REQUEST_LATENCY.observe(latency_s)
         REQUEST_COUNT.labels(status="success").inc()
 
-        return {"detections": detections, "latency_ms": latency_s * 1000}
+        return {
+            "detections": detections,
+            "latency_ms": latency_s * 1000,
+            "drift_zscore": drift_score,
+        }
     except Exception as e:
         REQUEST_COUNT.labels(status="error").inc()
         raise
-
 
 @app.get("/health")
 async def health():
