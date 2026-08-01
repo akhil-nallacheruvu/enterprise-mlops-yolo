@@ -367,12 +367,3 @@ The baseline (`BASELINE_MEAN_BRIGHTNESS`, `BASELINE_STD_BRIGHTNESS`) is computed
 
 ### Stack
 `Prometheus` · `Grafana` · `Locust` · `prometheus_client`
-
----
-
-## Resume Bullets
-
-- Optimized a YOLOv8n object detection model for CPU-based edge inference using OpenVINO, achieving a **65% reduction in p50 latency** and a **2.6x throughput improvement** over PyTorch baseline
-- Deployed a containerized ML serving pipeline to AWS EC2 with automated CI/CD (GitHub Actions → GHCR → SSH deploy), reducing manual deployment steps and enabling crash/reboot-safe recovery via container restart policies
-- Built a versioned, orchestrated ML lifecycle — DVC/S3 for dataset and model artifact versioning, Apache Airflow for pipeline orchestration (ingest → preprocess → retrain → eval-gate → deploy), and MLflow for experiment tracking
-- Instrumented the service with Prometheus/Grafana observability and validated production readiness via sustained Locust load testing (**20 concurrent users, 0% failure rate, 7.51 req/s sustained**) and a validated lightweight drift-detection signal (z-score 0.0008 in-distribution vs. 3.86 out-of-distribution)
