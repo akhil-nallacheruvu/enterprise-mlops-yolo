@@ -14,7 +14,7 @@ INPUT_SIZE = 640
 CONF_THRESHOLD = 0.25
 IOU_THRESHOLD = 0.45
 BASELINE_MEAN_BRIGHTNESS = 114.77       #run compute_baseline_stats.py to get these numbers
-BASELINE_STD_BRIGHTNESS = 0.0 
+BASELINE_STD_BRIGHTNESS = 1.0
 
 REQUEST_COUNT = Counter(
     "predict_requests_total", "Total prediction requests", ["status"]
